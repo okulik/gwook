@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+trap 'catch $? $LINENO' EXIT
+
+BUILDARGS="$*"
+SVCNAME=svixer
+PORT=4000
+
+catch() {
+  if [ "$1" != "0" ]; then
+    echo "Error $1 occurred on $2"
+    stop_service
+  fi
+}
+
+start_service() {
+  echo "* starting $SVCNAME"
+  make clean build
+  AUTH_USERNAME=admin AUTH_PASSWORD=admin bin/$SVCNAME &
+  PID=$!
+}
+
+wait_for_service() {
+  echo "* waiting for $SVCNAME"
+  while ! nc -z localhost $PORT; do
+    sleep 0.2
+  done
+  echo "* $SVCNAME running"
+  echo ""
+}
+
+stop_service() {
+  echo "* stopping $SVCNAME"
+  kill $PID
+}
+
+check_health() {
+  curl -s "http://localhost:4000/health"
+}
+
+health_test() {
+  echo "** running health_test"
+
+  ret=$(check_health)
+
+  if [ ! "$ret" == "ok" ]; then
+  echo $ret
+    echo "*** failed :("
+    exit 1
+  fi
+
+  echo "** health_test ok"
+  echo ""
+}
+
+invalid_path_test() {
+  echo "** running invalid_path_test"
+
+  ret=$(curl -s "http://localhost:4000/not-ifications")
+  echo "returned '$ret'"
+  if [ ! "$ret" == "404 page not found" ]; then
+    echo "*** failed :("
+    exit 1
+  fi
+
+  echo "** invalid_path_test ok"
+  echo ""
+}
+
+send_notification_test() {
+  echo "** running send_notification_test"
+
+  ret=$(curl -s --write-out '%{http_code}' -u admin:admin "http://localhost:4000/notifications" -d @test/events/event-01.json)
+  echo "returned '$ret'"
+  # we expect to get a 401 because we're not sending a valid token
+  case "$ret" in
+    *'401'*) ;;
+    *) echo "*** failed :("; exit 1 ;;
+  esac
+
+  echo "** send_notification_test ok"
+  echo ""
+}
+
+start_service
+wait_for_service
+
+health_test
+invalid_path_test
+send_notification_test
+
+stop_service
